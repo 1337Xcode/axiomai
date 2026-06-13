@@ -30,9 +30,8 @@ dev = [
 ]
 
 [tool.uv.sources]
-# Local checkout for development; swap to the public git URL when publishing:
-# tau2 = { git = "https://github.com/sierra-research/tau2-bench" }
-tau2 = { path = "../tau2-bench", editable = true }
+# Use the public git repo (no local checkout needed)
+tau2 = { git = "https://github.com/sierra-research/tau2-bench" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/a2a_hack"]

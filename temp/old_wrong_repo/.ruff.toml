@@ -1,0 +1,4 @@
+exclude = [".axiom_env", ".git", "__pycache__"]
+
+[lint]
+extend-ignore = ["D205", "D401", "D212", "D213", "D203", "D211", "D100"]

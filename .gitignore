@@ -29,7 +29,7 @@ Thumbs.db
 *.log
 
 # Temp/reference repos (not part of deliverable)
-temp/
+# temp/
 
 # Kiro internals
 .kiro/

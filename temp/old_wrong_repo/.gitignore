@@ -1,0 +1,43 @@
+# Environments
+.env
+.env.*
+!.env.example
+.axiom_env/
+venv/
+env/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Databases
+*.sqlite
+*.sqlite3
+*.db
+.axiom_fallback_db.sqlite
+
+# IDEs and Editors
+.cursor/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+Thumbs.db
+$null
+
+# Logs
+*.log
+
+# Frontend (if applicable)
+node_modules/
+dist/
+build/
+.next/

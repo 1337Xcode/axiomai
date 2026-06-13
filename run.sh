@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
 # AXIOM A2A Banking Agents - Mac/Linux Run & Test Script
-# Self-setup: installs missing deps, builds, runs, and scores.
+# Self-setup: finds Docker, installs uv, builds agents, runs harness scoring.
+
+set -uo pipefail  # no -e: we handle errors ourselves
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -11,187 +11,221 @@ NC='\033[0m'
 
 info()  { echo -e "${GREEN}[AXIOM]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
-error() { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
+die()   { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 
-# --- Dependency checks ---
-info "Checking dependencies..."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
 
-# Docker: check CLI first, if missing try to find Docker Desktop app and add to PATH
+# ============================================================
+# 1. FIND DOCKER
+# ============================================================
+info "Checking Docker..."
+
 if ! command -v docker &>/dev/null; then
-    # Docker Desktop on macOS installs CLI tools in these locations
-    DOCKER_PATHS=(
-        "/Applications/Docker.app/Contents/Resources/bin"
-        "/usr/local/bin"
-        "$HOME/.docker/bin"
-    )
-    FOUND_DOCKER=false
-    for dp in "${DOCKER_PATHS[@]}"; do
+    # Try common macOS Docker Desktop paths
+    for dp in "/Applications/Docker.app/Contents/Resources/bin" "$HOME/.docker/bin" "/usr/local/bin"; do
         if [ -x "$dp/docker" ]; then
             export PATH="$dp:$PATH"
-            FOUND_DOCKER=true
-            info "Found docker at $dp — added to PATH"
+            info "Found docker at $dp"
             break
         fi
     done
+fi
 
-    if [ "$FOUND_DOCKER" = false ]; then
-        # Check if Docker.app exists but CLI symlinks are missing
-        if [ -d "/Applications/Docker.app" ]; then
-            warn "Docker Desktop is installed but CLI tools aren't linked."
-            warn "Fix: Open Docker Desktop → Settings → General → enable 'Install Docker CLI in system PATH'"
-            warn "Or run: sudo ln -sf /Applications/Docker.app/Contents/Resources/bin/docker /usr/local/bin/docker"
-            error "Docker CLI not available. Fix the above and re-run."
-        else
-            error "Docker not found. Install Docker Desktop: https://docs.docker.com/desktop/install/mac-install/"
-        fi
+if ! command -v docker &>/dev/null; then
+    if [ -d "/Applications/Docker.app" ]; then
+        die "Docker Desktop installed but CLI not in PATH.\n  Fix: Open Docker Desktop → Settings → General → 'Install Docker CLI in system PATH'\n  Or: sudo ln -sf /Applications/Docker.app/Contents/Resources/bin/docker /usr/local/bin/docker"
+    else
+        die "Docker not found. Install: https://docs.docker.com/desktop/install/mac-install/"
     fi
 fi
 
+# Start Docker daemon if not running
 if ! docker info &>/dev/null 2>&1; then
-    # Try to start Docker Desktop
     if [ -d "/Applications/Docker.app" ]; then
-        warn "Docker daemon not running. Starting Docker Desktop..."
+        warn "Docker not running. Starting Docker Desktop..."
         open -a Docker
-        info "Waiting for Docker to start (up to 60s)..."
+        echo -n "  Waiting"
         for i in $(seq 1 30); do
-            if docker info &>/dev/null 2>&1; then
-                info "Docker is ready."
-                break
-            fi
+            if docker info &>/dev/null 2>&1; then echo ""; info "Docker ready."; break; fi
+            echo -n "."
             sleep 2
         done
-        if ! docker info &>/dev/null 2>&1; then
-            error "Docker failed to start within 60s. Open Docker Desktop manually and re-run."
-        fi
+        echo ""
+        docker info &>/dev/null 2>&1 || die "Docker failed to start. Open Docker Desktop manually."
     else
-        error "Docker daemon not running and Docker Desktop not found."
+        die "Docker daemon not running."
     fi
 fi
 
-if ! command -v docker-compose &>/dev/null && ! docker compose version &>/dev/null 2>&1; then
-    error "docker-compose not found. Install Docker Desktop (includes compose)."
-fi
-
-# Use 'docker compose' (v2) if available, else fallback to 'docker-compose'
+# Docker compose command
 if docker compose version &>/dev/null 2>&1; then
     DC="docker compose"
-else
+elif command -v docker-compose &>/dev/null; then
     DC="docker-compose"
+else
+    die "docker compose not available. Update Docker Desktop."
 fi
 
-if ! command -v curl &>/dev/null; then
-    error "curl not found. Install: brew install curl"
-fi
+info "Docker OK. Using: $DC"
 
-# Check for uv (needed for harness)
+# ============================================================
+# 2. FIND/INSTALL UV (Python package manager for harness)
+# ============================================================
 if ! command -v uv &>/dev/null; then
-    warn "uv not found. Installing..."
+    # Check common install locations
+    for up in "$HOME/.cargo/bin" "$HOME/.local/bin"; do
+        if [ -x "$up/uv" ]; then
+            export PATH="$up:$PATH"
+            break
+        fi
+    done
+fi
+
+if ! command -v uv &>/dev/null; then
+    info "Installing uv (Python package manager)..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="$HOME/.cargo/bin:$PATH"
-    if ! command -v uv &>/dev/null; then
-        error "Failed to install uv. Install manually: https://docs.astral.sh/uv/"
+    export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+    command -v uv &>/dev/null || die "uv install failed. Install manually: https://docs.astral.sh/uv/"
+fi
+
+info "uv OK: $(uv --version)"
+
+# ============================================================
+# 3. ENVIRONMENT FILE
+# ============================================================
+if [ ! -f .env ]; then
+    if [ -f env.local ]; then
+        cp env.local .env
+        warn "Created .env from env.local. Edit GOOGLE_API_KEY in .env, then re-run."
+        exit 1
+    else
+        die "No .env or env.local found."
     fi
 fi
 
-info "All dependencies OK."
-
-# --- Environment setup ---
-if [ ! -f .env ]; then
-    warn "No .env file. Copying env.local..."
-    cp env.local .env
-    echo ""
-    warn "EDIT .env with your GOOGLE_API_KEY before continuing!"
-    warn "Then re-run: ./run.sh"
-    exit 1
-fi
-
-# Validate GOOGLE_API_KEY is set
-source .env 2>/dev/null || true
+# Source env and validate key
+set -a; source .env 2>/dev/null || true; set +a
 if [ -z "${GOOGLE_API_KEY:-}" ] || [ "$GOOGLE_API_KEY" = "your-google-api-key-here" ]; then
-    error "GOOGLE_API_KEY not set in .env. Add your API key and re-run."
+    die "GOOGLE_API_KEY not set in .env. Add your Gemini API key and re-run."
 fi
 
-info "Environment configured."
+info "Environment OK (GOOGLE_API_KEY set, MODEL=${MODEL:-gemini-2.5-flash})"
 
-# --- Build and start agents ---
+# ============================================================
+# 4. BUILD & START AGENT CONTAINERS
+# ============================================================
 info "Building agent containers..."
-$DC build
+$DC build || die "Docker build failed. Check Dockerfiles."
 
-info "Starting services (redis:6379, personal-agent:9001, cs-agent:9002)..."
-$DC up -d
+info "Starting services..."
+$DC up -d || die "Failed to start containers."
 
-info "Waiting for CS Agent to index KB (may take 15-30s)..."
-for i in $(seq 1 60); do
-    if curl -sf http://localhost:9002/.well-known/agent.json &>/dev/null; then
+info "Waiting for agents to be ready..."
+echo -n "  "
+READY=false
+for i in $(seq 1 45); do
+    PA=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:9001/.well-known/agent.json 2>/dev/null || echo "000")
+    CS=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:9002/.well-known/agent.json 2>/dev/null || echo "000")
+    if [ "$PA" = "200" ] && [ "$CS" = "200" ]; then
+        READY=true
+        echo ""
         break
     fi
+    echo -n "."
     sleep 2
 done
 
-# Health checks
-echo ""
-if curl -sf http://localhost:9001/.well-known/agent.json &>/dev/null; then
-    info "Personal Agent: UP (http://localhost:9001)"
+if [ "$READY" = true ]; then
+    info "Both agents UP and serving."
 else
-    warn "Personal Agent not responding. Check: $DC logs personal-agent"
+    echo ""
+    warn "Agents not fully ready after 90s. Checking individually..."
+    [ "$PA" = "200" ] && info "  Personal Agent: UP" || warn "  Personal Agent: DOWN — check: $DC logs personal-agent"
+    [ "$CS" = "200" ] && info "  CS Agent: UP" || warn "  CS Agent: DOWN (may still be indexing KB) — check: $DC logs cs-agent"
+    warn "Continuing anyway — harness will retry on timeout..."
 fi
 
-if curl -sf http://localhost:9002/.well-known/agent.json &>/dev/null; then
-    info "CS Agent: UP (http://localhost:9002)"
-else
-    warn "CS Agent not responding. Check: $DC logs cs-agent"
-fi
-
-echo ""
-info "Agents running. Starting harness smoke test..."
-
-# --- Run harness smoke test ---
-HARNESS_DIR="temp/a2a-hackathon-main"
-if [ ! -d "$HARNESS_DIR" ]; then
-    error "Harness not found at $HARNESS_DIR. Clone it first."
+# ============================================================
+# 5. SETUP HARNESS CLI (a2a-hack)
+# ============================================================
+HARNESS_DIR="$SCRIPT_DIR/harness"
+if [ ! -d "$HARNESS_DIR/src" ]; then
+    die "Harness not found at $HARNESS_DIR. Something is wrong with the repo."
 fi
 
 cd "$HARNESS_DIR"
 
-# Install harness deps if needed
-if [ ! -d ".venv" ]; then
-    info "Setting up harness virtual environment..."
-    uv venv
-    uv pip install -e . 2>/dev/null || uv pip install . 2>/dev/null || warn "Harness install failed — tau2 may need local checkout"
+# Create venv and install if needed
+if [ ! -d ".venv" ] || ! .venv/bin/python -c "import a2a_hack" &>/dev/null 2>&1; then
+    info "Setting up harness environment (first run only, may take 1-2 min)..."
+    rm -rf .venv
+    uv venv --python 3.12 2>/dev/null || uv venv
+    info "Installing harness + tau2-bench..."
+    uv pip install -e "." 2>&1 | tail -3
 fi
 
-info "Running smoke test (1 task, quick sanity check)..."
+# Verify CLI works
+if ! uv run a2a-hack --help &>/dev/null 2>&1; then
+    warn "a2a-hack CLI failed. Trying reinstall..."
+    uv pip install -e "." 2>&1 | tail -5
+    uv run a2a-hack --help &>/dev/null 2>&1 || die "a2a-hack CLI broken. Run manually: cd harness && uv pip install -e . && uv run a2a-hack --help"
+fi
+
+info "Harness CLI ready."
+
+# ============================================================
+# 6. RUN SMOKE TEST (1 task — quick sanity check)
+# ============================================================
+echo ""
+echo "============================================"
+info "SMOKE TEST (1 task)"
+echo "============================================"
+echo ""
+
 uv run a2a-hack smoke \
     --personal-url http://localhost:9001 \
-    --cs-url http://localhost:9002 \
-    || warn "Smoke test returned non-zero (check output above)"
+    --cs-url http://localhost:9002
+SMOKE_EXIT=$?
 
+if [ $SMOKE_EXIT -eq 0 ]; then
+    info "Smoke test PASSED."
+else
+    warn "Smoke test returned exit code $SMOKE_EXIT (see output above)."
+fi
+
+# ============================================================
+# 7. RUN FULL SCORED EVALUATION (all training tasks)
+# ============================================================
 echo ""
-info "Smoke test done. Now running FULL scored evaluation (all training tasks)..."
+echo "============================================"
+info "FULL EVALUATION (training split — this is your score)"
+echo "============================================"
 echo ""
 
-# Run the full training split — this is what judges score on
-RESULTS_DIR="../../results/own-pair"
+RESULTS_DIR="$SCRIPT_DIR/results/own-pair"
 mkdir -p "$RESULTS_DIR"
 
-info "Running all training tasks (this takes several minutes, uses Gemini API credits)..."
 uv run a2a-hack run \
     --personal-url http://localhost:9001 \
     --cs-url http://localhost:9002 \
     --tasks train \
     --save-to "$RESULTS_DIR" \
-    --auto-resume \
-    || warn "Some tasks may have failed (check output above)"
+    --auto-resume
+RUN_EXIT=$?
 
 echo ""
 echo "============================================"
-info "EVALUATION COMPLETE"
+if [ $RUN_EXIT -eq 0 ]; then
+    info "EVALUATION COMPLETE — ALL TASKS PASSED"
+else
+    warn "EVALUATION COMPLETE — some tasks may have failed (exit $RUN_EXIT)"
+fi
 echo "============================================"
 echo ""
 info "Results saved to: results/own-pair/"
-info "Browse results:   cd $HARNESS_DIR && uv run tau2 view $RESULTS_DIR"
+info "The mean reward above is your OWN-PAIR score (50% of final)."
+info "Final = 50% own-pair + 25% your-PA×held-out-CS + 25% held-out-PA×your-CS"
 echo ""
-info "The mean reward printed above is your own-pair score (50% of final)."
-info "Final competition score = 50% own-pair + 25% your-PA-x-held-out-CS + 25% held-out-PA-x-your-CS"
-echo ""
-info "To stop agents: cd ../.. && $DC down"
+info "To browse results: cd harness && uv run tau2 view $RESULTS_DIR"
+info "To stop agents: cd $SCRIPT_DIR && $DC down"
