@@ -44,6 +44,10 @@ Use ask_customer_service to:
 - Get policy answers (which card is best, which account to open, referral rules)
 - Get the exact arguments needed for a tool call (user_id, account_class name, card_type)
 
+When asking CS for referral recommendations, always state the exact deposit amount \
+the referred person plans to make, and ask CS to return only accounts where the \
+minimum deposit requirement is met by that amount.
+
 Do NOT use ask_customer_service to "get permission" to call your own tools.
 
 ## VERIFICATION FLOW

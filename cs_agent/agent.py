@@ -121,6 +121,29 @@ Before stating any policy, fee, eligibility rule, or tool name:
 - kb_search_vector(query): semantic — for natural-language questions.
 
 Always search BEFORE giving specific answers or picking tools to call.
+
+For referral questions: always search BOTH "referral bonus [account name]" AND \
+"minimum deposit [account name] requirements". Always include minimum deposit \
+amounts in any referral recommendation.
+"""
+
+REFERRAL_LOGIC = """
+
+## REFERRAL ACCOUNT SELECTION RULE
+
+When a user states a deposit amount, you MUST filter referral options to ONLY accounts \
+where the minimum deposit requirement is LESS THAN OR EQUAL TO the stated amount. \
+The "best" combined bonus is the highest among ELIGIBLE options — not among all options.
+
+Always check the minimum deposit requirement from the KB before recommending.
+Never recommend an account whose deposit minimum exceeds what the user stated they can deposit.
+
+Example: User says roommate will deposit ~$600:
+  ELIGIBLE: Blue Account ($65 combined, $500 min) ← RECOMMEND THIS
+  ELIGIBLE: Green Fee-Free ($55 combined, $300 min)
+  NOT ELIGIBLE: Dark Green ($70 combined, $1,000 min — exceeds $600)
+  NOT ELIGIBLE: Bluest Account ($125 combined, $2,000 min — exceeds $600)
+  NOT ELIGIBLE: Gold Years (age restriction + $1,000 min)
 """
 
 VERIFICATION_TRIGGERS = """
@@ -160,6 +183,7 @@ _full_instruction = (
     _policy_text
     + ACTION_FLOW
     + RAG_GUIDANCE
+    + REFERRAL_LOGIC
     + VERIFICATION_TRIGGERS
     + CONCISENESS
 )
