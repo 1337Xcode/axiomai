@@ -16,20 +16,64 @@ error() { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 # --- Dependency checks ---
 info "Checking dependencies..."
 
+# Docker: check CLI first, if missing try to find Docker Desktop app and add to PATH
 if ! command -v docker &>/dev/null; then
-    error "Docker not found. Install: https://docs.docker.com/desktop/install/mac-install/"
+    # Docker Desktop on macOS installs CLI tools in these locations
+    DOCKER_PATHS=(
+        "/Applications/Docker.app/Contents/Resources/bin"
+        "/usr/local/bin"
+        "$HOME/.docker/bin"
+    )
+    FOUND_DOCKER=false
+    for dp in "${DOCKER_PATHS[@]}"; do
+        if [ -x "$dp/docker" ]; then
+            export PATH="$dp:$PATH"
+            FOUND_DOCKER=true
+            info "Found docker at $dp — added to PATH"
+            break
+        fi
+    done
+
+    if [ "$FOUND_DOCKER" = false ]; then
+        # Check if Docker.app exists but CLI symlinks are missing
+        if [ -d "/Applications/Docker.app" ]; then
+            warn "Docker Desktop is installed but CLI tools aren't linked."
+            warn "Fix: Open Docker Desktop → Settings → General → enable 'Install Docker CLI in system PATH'"
+            warn "Or run: sudo ln -sf /Applications/Docker.app/Contents/Resources/bin/docker /usr/local/bin/docker"
+            error "Docker CLI not available. Fix the above and re-run."
+        else
+            error "Docker not found. Install Docker Desktop: https://docs.docker.com/desktop/install/mac-install/"
+        fi
+    fi
 fi
 
-if ! docker info &>/dev/null; then
-    error "Docker daemon not running. Start Docker Desktop first."
+if ! docker info &>/dev/null 2>&1; then
+    # Try to start Docker Desktop
+    if [ -d "/Applications/Docker.app" ]; then
+        warn "Docker daemon not running. Starting Docker Desktop..."
+        open -a Docker
+        info "Waiting for Docker to start (up to 60s)..."
+        for i in $(seq 1 30); do
+            if docker info &>/dev/null 2>&1; then
+                info "Docker is ready."
+                break
+            fi
+            sleep 2
+        done
+        if ! docker info &>/dev/null 2>&1; then
+            error "Docker failed to start within 60s. Open Docker Desktop manually and re-run."
+        fi
+    else
+        error "Docker daemon not running and Docker Desktop not found."
+    fi
 fi
 
-if ! command -v docker-compose &>/dev/null && ! docker compose version &>/dev/null; then
+if ! command -v docker-compose &>/dev/null && ! docker compose version &>/dev/null 2>&1; then
     error "docker-compose not found. Install Docker Desktop (includes compose)."
 fi
 
 # Use 'docker compose' (v2) if available, else fallback to 'docker-compose'
-if docker compose version &>/dev/null; then
+if docker compose version &>/dev/null 2>&1; then
     DC="docker compose"
 else
     DC="docker-compose"
